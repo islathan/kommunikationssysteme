@@ -2,8 +2,10 @@ dependencies:
   protocol_examples_tapif_io:
     path: ${IDF_PATH}/examples/common_components/protocol_examples_tapif_io
     rules:
-      - if: "target in [linux]"
+    - if: target in [linux]
   protocol_examples_common:
     path: ${IDF_PATH}/examples/common_components/protocol_examples_common
     rules:
-      - if: "target not in [linux]"
+    - if: target not in [linux]
+  espressif/cjson: ^1.7.19~2
+  livekit/nanopb: ^0.4.9

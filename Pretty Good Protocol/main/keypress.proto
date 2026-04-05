@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+message KeyPress {
+    uint32 key_id = 1;
+    uint32 state  = 2;
+    uint32 ts     = 3;
+}

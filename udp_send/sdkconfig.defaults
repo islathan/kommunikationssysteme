@@ -1,0 +1,4 @@
+CONFIG_WIFI_SSID="your-ssid-here"
+CONFIG_WIFI_PASS="your-pass-here"
+CONFIG_UDP_SERVER_IP="your server ip"
+CONFIG_UDP_SERVER_PORT="your server port"

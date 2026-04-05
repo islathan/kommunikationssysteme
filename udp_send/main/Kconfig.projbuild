@@ -1,0 +1,13 @@
+menu "Project Configuration"
+
+config WIFI_SSID
+    string "WiFi SSID"
+
+config WIFI_PASS
+    string "WiFi password"
+
+config BROADCAST_PORT
+    int "Port ESP broadcasts to"
+    default 5555
+    
+endmenu

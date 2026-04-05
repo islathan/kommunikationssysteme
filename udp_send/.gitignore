@@ -1,0 +1,42 @@
+# Build output
+/build/
+/CMakeCache.txt
+/CMakeFiles/
+/Makefile
+/cmake_install.cmake
+/compile_commands.json
+
+# ESP-IDF Python virtual environment (falls genutzt)
+/.venv/
+/venv/
+
+# ESP-IDF specific
+/sdkconfig
+/sdkconfig.ci
+/sdkconfig.ci.linux
+/sdkconfig.defaults.linux
+/sdkconfig.old
+/esp-idf/*/build/
+
+# IDE / Editor
+/.vscode/
+/.idea/
+/*.code-workspace
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+
+# MacOS
+.DS_Store
+
+# Linux
+*.~ 
+*~
+
+# Backup files
+*.bak
+*.tmp
+
+dependencies.lock
+.*/

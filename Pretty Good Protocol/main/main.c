@@ -10,8 +10,8 @@
 
 // uncomment desired encoding
 // #define ENCODING_JSON
-#define ENCODING_TLV
-// #define ENCODING_PROTOBUF
+// #define ENCODING_TLV
+#define ENCODING_PROTOBUF
 
 #define BUTTON_TASK_STACKSIZE 2048
 #define HANDLER_TASK_STACKSIZE 4096

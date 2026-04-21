@@ -6,7 +6,7 @@ if(${target} STREQUAL "linux")
 endif()
 
 idf_component_register(
-    SRCS "wifi.c" "main.c"
+    SRCS "wifi.c" "main.c" "keypress.pb.c"
     INCLUDE_DIRS "." 
     REQUIRES button nvs_flash esp_wifi esp_event esp_netif lwip driver
 )

@@ -36,18 +36,33 @@ end
 
 function proto_keypress.dissector(tvb, pinfo, tree)
     local pkt_len = tvb:len()
-    if pkt_len == 0 then return end
+    if pkt_len < 7 then return end
 
     pinfo.cols.protocol = "KeyPress"
     pinfo.cols.info     = "ESP32 KeyPress"
 
     local subtree = tree:add(proto_keypress, tvb(), "KeyPress Message")
-    local offset  = 0
-
+    
+    -- Parse custom protocol header (7 bytes total)
+    local version = tvb(0, 1):uint()
+    local msg_type = tvb(1, 1):uint()
+    local seq = tvb(2, 2):uint()  -- big-endian by default
+    local dev_id = tvb(4, 1):uint()
+    local payload_len = tvb(5, 2):uint()
+    
+    subtree:add(tvb(0, 1), "Version: " .. version)
+    subtree:add(tvb(1, 1), "Message Type: " .. msg_type)
+    subtree:add(tvb(2, 2), "Sequence: " .. seq)
+    subtree:add(tvb(4, 1), "Device ID: " .. dev_id)
+    subtree:add(tvb(5, 2), "Payload Length: " .. payload_len)
+    
+    -- Now parse protobuf payload starting at offset 7
+    local offset = 7
     local fields_seen = {}
 
-    while offset < pkt_len do
-        local ok, tag_raw, new_offset = pcall(decode_varint, tvb, offset)
+    while offset < (7 + payload_len) and offset < pkt_len do
+        local ok, tag_raw, new_offset
+        ok, tag_raw, new_offset = pcall(decode_varint, tvb, offset)
         if not ok then
             subtree:add_expert_info(PI_MALFORMED, PI_ERROR, "Bad varint at offset " .. offset)
             break
@@ -59,14 +74,8 @@ function proto_keypress.dissector(tvb, pinfo, tree)
 
         -- All three fields are uint32 → wire type 0 (varint)
         if wire_type == 0 then
-            local val
-            ok, val, offset = pcall(function()
-                local v, o = decode_varint(tvb, offset)
-                return v, o
-            end)
-            -- pcall with multiple returns needs a wrapper like this:
             local v, o
-            ok = pcall(function() v, o = decode_varint(tvb, offset) end)
+            ok, v, o = pcall(decode_varint, tvb, offset)
             if not ok then
                 subtree:add_expert_info(PI_MALFORMED, PI_ERROR, "Bad varint value at offset " .. offset)
                 break

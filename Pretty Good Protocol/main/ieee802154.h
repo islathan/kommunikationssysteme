@@ -40,10 +40,12 @@ typedef void (*ieee802154_rx_callback_t)(const ieee802154_frame_t* frame, int8_t
 
 /**
  * Initialize IEEE 802.15.4 driver
- * @param channel Channel to use (11-26)
+ * @param channel  Channel to use (11-26)
+ * @param pan_id   PAN identifier shared by all devices in the network
+ * @param own_addr Short address of this device (must be unique per device)
  * @return ESP_OK on success, error code otherwise
  */
-esp_err_t ieee802154_init(uint8_t channel);
+esp_err_t ieee802154_init(uint8_t channel, uint16_t pan_id, uint16_t own_addr);
 
 /**
  * Deinitialize IEEE 802.15.4 driver

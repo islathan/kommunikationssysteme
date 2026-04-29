@@ -9,6 +9,7 @@ static const char* TAG = "IEEE802154";
 
 // Global RX callback
 static ieee802154_rx_callback_t g_rx_callback = NULL;
+static uint16_t g_own_addr = 0x0000;
 
 // External RX queue from main.c
 extern QueueHandle_t ieee802154_rx_queue;
@@ -50,20 +51,30 @@ static uint16_t build_frame_control(void) {
     // Intra-PAN flag (source and dest in same PAN)
     fc |= IEEE802154_INTRA_PAN;
 
-    // ACK request
-    fc |= IEEE802154_ACK_REQUEST;
+    // No ACK request — broadcast frames don't get ACKed in 802.15.4, and
+    // setting this flag with no proper ACK sender causes hardware retransmissions.
 
     return fc;
 }
 
-esp_err_t ieee802154_init(uint8_t channel) {
-    ESP_LOGI(TAG, "Initializing IEEE 802.15.4");
+esp_err_t ieee802154_init(uint8_t channel, uint16_t pan_id, uint16_t own_addr) {
+    ESP_LOGI(TAG, "Initializing IEEE 802.15.4 ch=%d PAN=0x%04X addr=0x%04X",
+             channel, pan_id, own_addr);
+
+    g_own_addr = own_addr;
 
     // dBm, valid range: -24 to 20 on ESP32-H2/C6
     esp_ieee802154_set_txpower(20);
 
     ESP_ERROR_CHECK(esp_ieee802154_enable());
     ESP_ERROR_CHECK(esp_ieee802154_set_channel(channel));
+    // Required for hardware address filtering — without these the radio accepts
+    // everything (including own transmitted frames) or nothing at all.
+    ESP_ERROR_CHECK(esp_ieee802154_set_panid(pan_id));
+    ESP_ERROR_CHECK(esp_ieee802154_set_short_address(own_addr));
+    // Disable promiscuous mode so the hardware filter drops frames from foreign PAN IDs.
+    // The radio defaults to promiscuous ON, which is why you receive classmates' traffic.
+    ESP_ERROR_CHECK(esp_ieee802154_set_promiscuous(false));
     return ESP_OK;
 }
 
@@ -274,7 +285,19 @@ int ieee802154_parse_frame(const uint8_t* frame_data, uint16_t frame_len,
  */
 void esp_ieee802154_receive_done(uint8_t* frame, esp_ieee802154_frame_info_t* frame_info) {
     if (!frame || !ieee802154_rx_queue) {
+        esp_ieee802154_receive_handle_done(frame);
         return;
+    }
+
+    // Frame layout (intra-PAN, short addresses):
+    // [0]=length [1-2]=FCF [3]=seq [4-5]=destPAN [6-7]=destAddr [8-9]=srcAddr [10+]=payload
+    // Filter out frames we sent ourselves — promiscuous hardware can echo them back.
+    if (frame[0] >= 10) {
+        uint16_t src_addr = frame[8] | ((uint16_t)frame[9] << 8);
+        if (src_addr == g_own_addr) {
+            esp_ieee802154_receive_handle_done(frame);
+            return;
+        }
     }
 
     // Get frame length from first byte

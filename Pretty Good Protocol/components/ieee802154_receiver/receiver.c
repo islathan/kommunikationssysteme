@@ -79,14 +79,13 @@ static void ieee802154_rx_callback(const ieee802154_frame_t* frame, int8_t rssi)
 esp_err_t ieee802154_receiver_init(uint8_t channel) {
     ESP_LOGI(TAG, "Initializing IEEE 802.15.4 receiver on channel %u", channel);
 
-    esp_err_t ret = ieee802154_init(channel);
+    esp_err_t ret = ieee802154_init(channel, 0xABCD, 0x0002);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize IEEE 802.15.4: 0x%x", ret);
         return ret;
     }
 
-    // Register RX callback (implementation in ieee802154 driver)
-    // For now, just log that we're ready
+    ieee802154_set_rx_callback(ieee802154_rx_callback);
     ESP_LOGI(TAG, "IEEE 802.15.4 receiver ready on channel %u", channel);
 
     return ESP_OK;

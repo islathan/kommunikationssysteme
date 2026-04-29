@@ -24,6 +24,10 @@
 #define MAX_RETRIES 3
 #define RETRY_TIMEOUT_MS 200
 
+// 802.15.4 network config — PAN_ID must match on all devices, MY_ADDR must be unique per device
+#define PGP_PAN_ID  0xABCD
+#define MY_ADDR     0x0001 // change to 0x0002 on the second device
+
 // ---- Protocol types ------------------------------------------------
 
 typedef enum : uint8_t {
@@ -211,11 +215,11 @@ void button_handler_802154_task(void* arg) {
 
     ESP_LOGI(TAG, "IEEE 802.15.4 Handler Task started");
 
-    // Frame parameters according to IEEE 802.15.4 standard
-    uint16_t dest_pan_id = 0xABCD; // Destination PAN ID
-    uint16_t dest_addr = 0x0002;   // Destination short address
-    uint16_t src_pan_id = 0xABCD;  // Source PAN ID (same as dest for intra-PAN)
-    uint16_t src_addr = 0x0001;    // Source short address
+    // Frame parameters — broadcast so every device in the PAN receives the frame
+    uint16_t dest_pan_id = PGP_PAN_ID;
+    uint16_t dest_addr   = 0xFFFF; // 802.15.4 broadcast address
+    uint16_t src_pan_id  = PGP_PAN_ID;
+    uint16_t src_addr    = MY_ADDR;
 
     while (1) {
         if (xQueueReceive(button_event_queue, &event, portMAX_DELAY) != pdTRUE)
@@ -432,7 +436,7 @@ void app_main(void) {
     ESP_LOGI(TAG, "=== Starting IEEE 802.15.4 mode ===");
 
     // Initialize IEEE 802.15.4 on channel 15
-    ESP_ERROR_CHECK(ieee802154_init(15));
+    ESP_ERROR_CHECK(ieee802154_init(15, PGP_PAN_ID, MY_ADDR));
     ESP_LOGI(TAG, "IEEE 802.15.4 initialized, ready to send");
 
     // Create RX queue for received frames

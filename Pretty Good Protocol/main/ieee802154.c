@@ -59,6 +59,9 @@ static uint16_t build_frame_control(void) {
 esp_err_t ieee802154_init(uint8_t channel) {
     ESP_LOGI(TAG, "Initializing IEEE 802.15.4");
 
+    // dBm, valid range: -24 to 20 on ESP32-H2/C6
+    esp_ieee802154_set_txpower(20);
+
     ESP_ERROR_CHECK(esp_ieee802154_enable());
     ESP_ERROR_CHECK(esp_ieee802154_set_channel(channel));
     return ESP_OK;

@@ -1,5 +1,6 @@
 #include "button.h"
 #include "cJSON.h"
+#include "ieee802154.h"
 #include "keypress.pb.h"
 #include "lwip/sockets.h"
 #include "nvs_flash.h"
@@ -12,6 +13,11 @@
 // #define ENCODING_JSON
 // #define ENCODING_TLV
 #define ENCODING_PROTOBUF
+
+// ---- Communication modes -------------------------------------------
+// Uncomment ONE of the following to choose the transport mode:
+// #define ENABLE_WIFI_UDP      // WiFi + UDP broadcast
+#define ENABLE_IEEE802154 // IEEE 802.15.4 radio (no WiFi needed)
 
 #define BUTTON_TASK_STACKSIZE 2048
 #define HANDLER_TASK_STACKSIZE 4096
@@ -51,6 +57,14 @@ typedef struct {
 static const char* TAG = "Main";
 QueueHandle_t button_event_queue;
 static uint16_t g_seq = 0; // global sequence counter, increments per send
+
+// IEEE 802.15.4 RX frame queue
+QueueHandle_t ieee802154_rx_queue = NULL;
+
+typedef struct {
+    uint8_t data[256];
+    uint16_t len;
+} ieee802154_rx_frame_t;
 
 // ---- Encoding: TLV -------------------------------------------------
 
@@ -190,6 +204,108 @@ void button_task(void* arg) {
     }
 }
 
+void button_handler_802154_task(void* arg) {
+    button_event_t event;
+    uint8_t payload[128];
+    uint8_t frame_buf[256];
+
+    ESP_LOGI(TAG, "IEEE 802.15.4 Handler Task started");
+
+    // Frame parameters according to IEEE 802.15.4 standard
+    uint16_t dest_pan_id = 0xABCD; // Destination PAN ID
+    uint16_t dest_addr = 0x0002;   // Destination short address
+    uint16_t src_pan_id = 0xABCD;  // Source PAN ID (same as dest for intra-PAN)
+    uint16_t src_addr = 0x0001;    // Source short address
+
+    while (1) {
+        if (xQueueReceive(button_event_queue, &event, portMAX_DELAY) != pdTRUE)
+            continue;
+
+        key_state_t state = event.pressed ? KEY_PRESSED : KEY_RELEASED;
+        ESP_LOGI(TAG, "Button %s at %lums (802.15.4)", event.pressed ? "PRESSED" : "RELEASED",
+                 event.timestamp);
+
+        // --- Encode payload
+        int plen = -1;
+
+#if defined(ENCODING_TLV)
+        plen = encode_tlv_keypress(payload, sizeof(payload), /*key_id=*/0, state, event.timestamp);
+
+#elif defined(ENCODING_JSON)
+        plen = encode_json_keypress(payload, sizeof(payload), /*key_id=*/0, state, event.timestamp);
+
+#elif defined(ENCODING_PROTOBUF)
+        plen = encode_protobuf_keypress(payload, sizeof(payload), /*key_id=*/0, state,
+                                        event.timestamp);
+#endif
+
+        if (plen < 0) {
+            ESP_LOGE(TAG, "Encoding failed");
+            continue;
+        }
+
+        uint8_t seq = g_seq++; // Increment global sequence counter
+
+        // --- Build IEEE 802.15.4 frame
+        int frame_len = ieee802154_build_frame(seq,              // Sequence number
+                                               dest_pan_id,      // Destination PAN ID
+                                               dest_addr,        // Destination address (2 bytes)
+                                               src_pan_id,       // Source PAN ID
+                                               src_addr,         // Source address (2 bytes)
+                                               payload,          // Payload
+                                               (uint16_t)plen,   // Payload length
+                                               frame_buf,        // Output buffer
+                                               sizeof(frame_buf) // Buffer size
+        );
+
+        if (frame_len < 0) {
+            ESP_LOGE(TAG, "Failed to build frame");
+            continue;
+        }
+
+        // --- Send IEEE 802.15.4 frame
+        esp_err_t ret = ieee802154_send(frame_buf, (uint16_t)frame_len);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "802.15.4 frame sent (seq=%u, len=%d)", seq, frame_len);
+        } else {
+            ESP_LOGE(TAG, "Failed to send 802.15.4 frame");
+        }
+    }
+}
+
+void button_receiver_802154_task(void* arg) {
+    uint8_t rx_buf[256];
+    ieee802154_frame_t frame;
+    ieee802154_rx_frame_t rx_frame;
+
+    ESP_LOGI(TAG, "IEEE 802.15.4 Receiver Task started");
+
+    while (1) {
+        // Wait for frame from RX queue (populated by ISR callback)
+        if (xQueueReceive(ieee802154_rx_queue, &rx_frame, portMAX_DELAY) == pdTRUE) {
+            // Parse the received frame
+            if (ieee802154_parse_frame(rx_frame.data, rx_frame.len, &frame) == 0) {
+                ESP_LOGI(TAG,
+                         "RX: SEQ=%u | DEST: PAN=0x%04X ADDR=0x%04X | SRC: ADDR=0x%04X | "
+                         "Payload=%d bytes",
+                         frame.sequence, frame.dest_pan_id, frame.dest_addr, frame.src_addr,
+                         frame.payload_len);
+
+                // Log payload in hex if present
+                if (frame.payload_len > 0 && frame.payload_len <= 64) {
+                    ESP_LOGI(TAG, "RX Payload (hex): ");
+                    for (int i = 0; i < frame.payload_len; i++) {
+                        printf("%02X ", frame.payload[i]);
+                    }
+                    printf("\n");
+                }
+            } else {
+                ESP_LOGW(TAG, "Failed to parse received frame");
+            }
+        }
+    }
+}
+
 void button_handler_task(void* arg) {
     button_event_t event;
     uint8_t payload[128];
@@ -295,13 +411,44 @@ void button_handler_task(void* arg) {
 void app_main(void) {
     ESP_ERROR_CHECK(nvs_flash_init());
 
+    button_event_queue = xQueueCreate(10, sizeof(button_event_t));
+
+    // Start button polling task (works for both WiFi and IEEE 802.15.4)
+    xTaskCreate(button_task, "BTN_POLL", BUTTON_TASK_STACKSIZE, NULL, 3, NULL);
+
+#if defined(ENABLE_WIFI_UDP)
+    // WiFi + UDP broadcast mode
+    ESP_LOGI(TAG, "=== Starting WiFi + UDP mode ===");
     EventGroupHandle_t wifi_event_group = wifi_init();
     ESP_LOGI(TAG, "Waiting for Wi-Fi...");
     xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
     ESP_LOGI(TAG, "Wi-Fi connected.");
 
-    button_event_queue = xQueueCreate(10, sizeof(button_event_t));
-
+    // Start WiFi handler task
     xTaskCreate(button_handler_task, "BTN_HANDLER", HANDLER_TASK_STACKSIZE, NULL, 3, NULL);
-    xTaskCreate(button_task, "BTN_POLL", BUTTON_TASK_STACKSIZE, NULL, 3, NULL);
+
+#elif defined(ENABLE_IEEE802154)
+    // IEEE 802.15.4 mode (no WiFi needed)
+    ESP_LOGI(TAG, "=== Starting IEEE 802.15.4 mode ===");
+
+    // Initialize IEEE 802.15.4 on channel 15
+    ESP_ERROR_CHECK(ieee802154_init(15));
+    ESP_LOGI(TAG, "IEEE 802.15.4 initialized, ready to send");
+
+    // Create RX queue for received frames
+    ieee802154_rx_queue = xQueueCreate(10, sizeof(ieee802154_rx_frame_t));
+
+    // Start IEEE 802.15.4 transmitter task
+    xTaskCreate(button_handler_802154_task, "BTN_802154_TX", HANDLER_TASK_STACKSIZE, NULL, 3, NULL);
+
+    // Start IEEE 802.15.4 receiver task
+    xTaskCreate(button_receiver_802154_task, "BTN_802154_RX", HANDLER_TASK_STACKSIZE, NULL, 3,
+                NULL);
+
+    // Enable receiver to start listening
+    ESP_ERROR_CHECK(ieee802154_rx_enable());
+
+#else
+#error "Please define either ENABLE_WIFI_UDP or ENABLE_IEEE802154 in main.c"
+#endif
 }

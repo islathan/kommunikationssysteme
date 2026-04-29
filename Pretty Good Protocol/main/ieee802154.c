@@ -19,40 +19,27 @@ typedef struct {
     uint16_t len;
 } ieee802154_rx_frame_t;
 
-// Frame Control Field construction for short addresses, data frame
-// Bit layout (little-endian):
-// [1:0]   = 01 (data frame)
-// [3:2]   = 10 (short addressing for source and dest)
-// [4]     = 0 (no security)
-// [5]     = 1 (ACK request)
-// [6]     = 1 (intra-PAN - no separate source PAN)
-// [7]     = 0 (no frame pending)
-// [8]     = 0 (no AR)
-// [9]     = 0 (no IE present)
-// [10]    = 0 (no dest address mode extension)
-// [11:14] = 0 (frame version 2006)
-// [15]    = 0 (reserved)
+// IEEE 802.15.4 FCF bit positions:
+// [2:0]   = frame type (001 = data)
+// [3]     = security enabled
+// [4]     = frame pending
+// [5]     = ACK request
+// [6]     = PAN ID compression (intra-PAN)
+// [9:8]   = sequence number suppression / IE present
+// [11:10] = destination addressing mode (10 = short)
+// [13:12] = frame version
+// [15:14] = source addressing mode (10 = short)
 
 static uint16_t build_frame_control(void) {
     uint16_t fc = 0;
 
-    // Frame type: Data (01)
-    fc |= (IEEE802154_FRAME_TYPE_DATA & 0x03);
+    fc |= (IEEE802154_FRAME_TYPE_DATA & 0x07);          // bits 2:0 — data frame
+    fc |= ((IEEE802154_ADDR_MODE_SHORT & 0x03) << 10);  // bits 11:10 — dest addr mode
+    fc |= ((IEEE802154_ADDR_MODE_SHORT & 0x03) << 14);  // bits 15:14 — src addr mode
+    fc |= IEEE802154_INTRA_PAN;                         // bit 6 — no separate src PAN ID
 
-    // Destination addressing mode: short (10)
-    fc |= ((IEEE802154_ADDR_MODE_SHORT & 0x03) << 2);
-
-    // Frame version: 2006/2015 (00)
-    // Bit 11-12 already 0
-
-    // Source addressing mode: short (10)
-    fc |= ((IEEE802154_ADDR_MODE_SHORT & 0x03) << 14);
-
-    // Intra-PAN flag (source and dest in same PAN)
-    fc |= IEEE802154_INTRA_PAN;
-
-    // No ACK request — broadcast frames don't get ACKed in 802.15.4, and
-    // setting this flag with no proper ACK sender causes hardware retransmissions.
+    // No ACK request: broadcast frames are never ACKed; requesting ACK on broadcast
+    // causes automatic hardware retransmissions when no ACK arrives.
 
     return fc;
 }
@@ -189,7 +176,11 @@ esp_err_t ieee802154_set_channel(uint8_t channel) {
 
 esp_err_t ieee802154_rx_enable(void) {
     ESP_LOGI(TAG, "Enabling receiver");
-    return esp_ieee802154_set_rx_when_idle(true);
+    // set_rx_when_idle only configures auto-RX after TX — it does not start receiving now.
+    // esp_ieee802154_receive() is required to put the radio into RX mode immediately.
+    esp_err_t ret = esp_ieee802154_set_rx_when_idle(true);
+    if (ret != ESP_OK) return ret;
+    return esp_ieee802154_receive();
 }
 
 void ieee802154_rx_disable(void) {

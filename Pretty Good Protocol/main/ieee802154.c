@@ -17,6 +17,7 @@ extern QueueHandle_t ieee802154_rx_queue;
 typedef struct {
     uint8_t data[256];
     uint16_t len;
+    int8_t rssi;
 } ieee802154_rx_frame_t;
 
 // IEEE 802.15.4 FCF bit positions:
@@ -298,6 +299,7 @@ void esp_ieee802154_receive_done(uint8_t* frame, esp_ieee802154_frame_info_t* fr
     if (frame_len <= sizeof(ieee802154_rx_frame_t)) {
         ieee802154_rx_frame_t rx_frame;
         rx_frame.len = frame_len;
+        rx_frame.rssi = frame_info->rssi;
         memcpy(rx_frame.data, frame, frame_len);
 
         // Send to queue from ISR context

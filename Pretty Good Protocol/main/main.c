@@ -68,6 +68,7 @@ QueueHandle_t ieee802154_rx_queue = NULL;
 typedef struct {
     uint8_t data[256];
     uint16_t len;
+    int8_t rssi;
 } ieee802154_rx_frame_t;
 
 // ---- Encoding: TLV -------------------------------------------------
@@ -290,10 +291,8 @@ void button_receiver_802154_task(void* arg) {
             // Parse the received frame
             if (ieee802154_parse_frame(rx_frame.data, rx_frame.len, &frame) == 0) {
                 ESP_LOGI(TAG,
-                         "RX: SEQ=%u | DEST: PAN=0x%04X ADDR=0x%04X | SRC: ADDR=0x%04X | "
-                         "Payload=%d bytes",
-                         frame.sequence, frame.dest_pan_id, frame.dest_addr, frame.src_addr,
-                         frame.payload_len);
+                         "RX: SEQ=%u | SRC=0x%04X | Payload=%d bytes | RSSI=%d dBm",
+                         frame.sequence, frame.src_addr, frame.payload_len, rx_frame.rssi);
 
                 // Log payload in hex if present
                 if (frame.payload_len > 0 && frame.payload_len <= 64) {

@@ -5,7 +5,7 @@
 #include "freertos/queue.h"
 #include "string.h"
 
-static const char* TAG = "IEEE802154";
+static const char *TAG = "IEEE802154";
 
 // Global RX callback
 static ieee802154_rx_callback_t g_rx_callback = NULL;
@@ -14,10 +14,14 @@ static uint16_t g_own_addr = 0x0000;
 // External RX queue from main.c
 extern QueueHandle_t ieee802154_rx_queue;
 
-typedef struct {
+typedef struct
+{
     uint8_t data[256];
     uint16_t len;
-    int8_t rssi;
+    int8_t  rssi;      // signal strength in dBm (higher = stronger, e.g. -60 better than -90)
+    uint8_t lqi;       // link quality 0–255 (higher = better, >200 excellent, <50 poor)
+    uint8_t channel;   // channel the frame was received on (11–26)
+    uint64_t timestamp; // µs timestamp of the SFD (start-of-frame delimiter)
 } ieee802154_rx_frame_t;
 
 // IEEE 802.15.4 FCF bit positions:
@@ -31,13 +35,14 @@ typedef struct {
 // [13:12] = frame version
 // [15:14] = source addressing mode (10 = short)
 
-static uint16_t build_frame_control(void) {
+static uint16_t build_frame_control(void)
+{
     uint16_t fc = 0;
 
-    fc |= (IEEE802154_FRAME_TYPE_DATA & 0x07);          // bits 2:0 — data frame
-    fc |= ((IEEE802154_ADDR_MODE_SHORT & 0x03) << 10);  // bits 11:10 — dest addr mode
-    fc |= ((IEEE802154_ADDR_MODE_SHORT & 0x03) << 14);  // bits 15:14 — src addr mode
-    fc |= IEEE802154_INTRA_PAN;                         // bit 6 — no separate src PAN ID
+    fc |= (IEEE802154_FRAME_TYPE_DATA & 0x07);         // bits 2:0 — data frame
+    fc |= ((IEEE802154_ADDR_MODE_SHORT & 0x03) << 10); // bits 11:10 — dest addr mode
+    fc |= ((IEEE802154_ADDR_MODE_SHORT & 0x03) << 14); // bits 15:14 — src addr mode
+    fc |= IEEE802154_INTRA_PAN;                        // bit 6 — no separate src PAN ID
 
     // No ACK request: broadcast frames are never ACKed; requesting ACK on broadcast
     // causes automatic hardware retransmissions when no ACK arrives.
@@ -45,14 +50,14 @@ static uint16_t build_frame_control(void) {
     return fc;
 }
 
-esp_err_t ieee802154_init(uint8_t channel, uint16_t pan_id, uint16_t own_addr) {
+esp_err_t ieee802154_init(uint8_t channel, uint16_t pan_id, uint16_t own_addr)
+{
     ESP_LOGI(TAG, "Initializing IEEE 802.15.4 ch=%d PAN=0x%04X addr=0x%04X",
              channel, pan_id, own_addr);
 
     g_own_addr = own_addr;
 
-    // dBm, valid range: -24 to 20 on ESP32-H2/C6
-    esp_ieee802154_set_txpower(20);
+    esp_ieee802154_set_txpower(18);
 
     ESP_ERROR_CHECK(esp_ieee802154_enable());
     ESP_ERROR_CHECK(esp_ieee802154_set_channel(channel));
@@ -66,21 +71,24 @@ esp_err_t ieee802154_init(uint8_t channel, uint16_t pan_id, uint16_t own_addr) {
     return ESP_OK;
 }
 
-void ieee802154_deinit(void) {
+void ieee802154_deinit(void)
+{
     esp_ieee802154_disable();
     ESP_LOGI(TAG, "IEEE 802.15.4 disabled");
 }
 
 int ieee802154_build_frame(uint8_t sequence, uint16_t dest_pan_id, uint16_t dest_addr,
-                           uint16_t src_pan_id, uint16_t src_addr, const uint8_t* payload,
-                           uint16_t payload_len, uint8_t* out, size_t out_len) {
-    if (!out || out_len < 12) { // Minimum frame size: 1 (len) + 2 (FC) + 1 (seq) + 2 (dest_pan) + 2
-                                // (dest_addr) + 2 (src_addr)
+                           uint16_t src_pan_id, uint16_t src_addr, const uint8_t *payload,
+                           uint16_t payload_len, uint8_t *out, size_t out_len)
+{
+    if (!out || out_len < 12)
+    { // Minimum frame size: 1 (len) + 2 (FC) + 1 (seq) + 2 (dest_pan) + 2
+      // (dest_addr) + 2 (src_addr)
         ESP_LOGE(TAG, "Output buffer too small");
         return -1;
     }
 
-    uint8_t* p = out + 1; // Start after length byte
+    uint8_t *p = out + 1; // Start after length byte
     size_t remaining = out_len - 1;
 
     // Frame Control (2 bytes, little-endian)
@@ -120,8 +128,10 @@ int ieee802154_build_frame(uint8_t sequence, uint16_t dest_pan_id, uint16_t dest
     remaining -= 2;
 
     // Payload
-    if (payload_len > 0) {
-        if (remaining < payload_len) {
+    if (payload_len > 0)
+    {
+        if (remaining < payload_len)
+        {
             ESP_LOGE(TAG, "Payload too large for buffer");
             return -1;
         }
@@ -144,8 +154,10 @@ int ieee802154_build_frame(uint8_t sequence, uint16_t dest_pan_id, uint16_t dest
     return total_frame_len;
 }
 
-esp_err_t ieee802154_send(const uint8_t* frame_data, uint16_t frame_len) {
-    if (!frame_data || frame_len == 0) {
+esp_err_t ieee802154_send(const uint8_t *frame_data, uint16_t frame_len)
+{
+    if (!frame_data || frame_len == 0)
+    {
         ESP_LOGE(TAG, "Invalid frame data");
         return ESP_ERR_INVALID_ARG;
     }
@@ -154,19 +166,24 @@ esp_err_t ieee802154_send(const uint8_t* frame_data, uint16_t frame_len) {
 
     // esp_ieee802154_transmit expects the frame without FCS
     // FCS is handled by hardware
-    esp_err_t ret = esp_ieee802154_transmit((uint8_t*)frame_data, true);
+    esp_err_t ret = esp_ieee802154_transmit((uint8_t *)frame_data, true);
 
-    if (ret == ESP_OK) {
+    if (ret == ESP_OK)
+    {
         ESP_LOGI(TAG, "Frame transmitted successfully");
-    } else {
+    }
+    else
+    {
         ESP_LOGE(TAG, "Failed to transmit frame: %s", esp_err_to_name(ret));
     }
 
     return ret;
 }
 
-esp_err_t ieee802154_set_channel(uint8_t channel) {
-    if (channel < 11 || channel > 26) {
+esp_err_t ieee802154_set_channel(uint8_t channel)
+{
+    if (channel < 11 || channel > 26)
+    {
         ESP_LOGE(TAG, "Invalid channel %d (valid range: 11-26)", channel);
         return ESP_ERR_INVALID_ARG;
     }
@@ -175,32 +192,41 @@ esp_err_t ieee802154_set_channel(uint8_t channel) {
     return ret;
 }
 
-esp_err_t ieee802154_rx_enable(void) {
+esp_err_t ieee802154_rx_enable(void)
+{
     ESP_LOGI(TAG, "Enabling receiver");
     // set_rx_when_idle only configures auto-RX after TX — it does not start receiving now.
     // esp_ieee802154_receive() is required to put the radio into RX mode immediately.
     esp_err_t ret = esp_ieee802154_set_rx_when_idle(true);
-    if (ret != ESP_OK) return ret;
+    if (ret != ESP_OK)
+        return ret;
     return esp_ieee802154_receive();
 }
 
-void ieee802154_rx_disable(void) {
+void ieee802154_rx_disable(void)
+{
     esp_ieee802154_set_rx_when_idle(false);
     ESP_LOGI(TAG, "Receiver disabled");
 }
 
-void ieee802154_set_rx_callback(ieee802154_rx_callback_t callback) {
+void ieee802154_set_rx_callback(ieee802154_rx_callback_t callback)
+{
     g_rx_callback = callback;
-    if (callback) {
+    if (callback)
+    {
         ESP_LOGI(TAG, "RX callback registered");
-    } else {
+    }
+    else
+    {
         ESP_LOGI(TAG, "RX callback unregistered");
     }
 }
 
-int ieee802154_parse_frame(const uint8_t* frame_data, uint16_t frame_len,
-                           ieee802154_frame_t* out_frame) {
-    if (!frame_data || !out_frame || frame_len < 11) {
+int ieee802154_parse_frame(const uint8_t *frame_data, uint16_t frame_len,
+                           ieee802154_frame_t *out_frame)
+{
+    if (!frame_data || !out_frame || frame_len < 11)
+    {
         ESP_LOGE(TAG, "Invalid frame or too short");
         return -1;
     }
@@ -208,7 +234,7 @@ int ieee802154_parse_frame(const uint8_t* frame_data, uint16_t frame_len,
     memset(out_frame, 0, sizeof(ieee802154_frame_t));
 
     // Skip length byte (frame_data[0])
-    const uint8_t* p = frame_data + 1;
+    const uint8_t *p = frame_data + 1;
     size_t remaining = frame_len - 1;
 
     // Frame Control (2 bytes, little-endian)
@@ -252,10 +278,13 @@ int ieee802154_parse_frame(const uint8_t* frame_data, uint16_t frame_len,
     out_frame->src_pan_id = out_frame->dest_pan_id;
 
     // Remaining bytes are payload (excluding FCS which is not included in frame_data)
-    if (remaining > 0) {
-        out_frame->payload = (uint8_t*)p;
+    if (remaining > 0)
+    {
+        out_frame->payload = (uint8_t *)p;
         out_frame->payload_len = (uint16_t)remaining;
-    } else {
+    }
+    else
+    {
         out_frame->payload = NULL;
         out_frame->payload_len = 0;
     }
@@ -275,8 +304,10 @@ int ieee802154_parse_frame(const uint8_t* frame_data, uint16_t frame_len,
  * Callback invoked by the IEEE 802.15.4 driver when a frame is received
  * This runs in ISR context, so keep it short
  */
-void esp_ieee802154_receive_done(uint8_t* frame, esp_ieee802154_frame_info_t* frame_info) {
-    if (!frame || !ieee802154_rx_queue) {
+void esp_ieee802154_receive_done(uint8_t *frame, esp_ieee802154_frame_info_t *frame_info)
+{
+    if (!frame || !ieee802154_rx_queue)
+    {
         esp_ieee802154_receive_handle_done(frame);
         return;
     }
@@ -284,9 +315,11 @@ void esp_ieee802154_receive_done(uint8_t* frame, esp_ieee802154_frame_info_t* fr
     // Frame layout (intra-PAN, short addresses):
     // [0]=length [1-2]=FCF [3]=seq [4-5]=destPAN [6-7]=destAddr [8-9]=srcAddr [10+]=payload
     // Filter out frames we sent ourselves — promiscuous hardware can echo them back.
-    if (frame[0] >= 10) {
+    if (frame[0] >= 10)
+    {
         uint16_t src_addr = frame[8] | ((uint16_t)frame[9] << 8);
-        if (src_addr == g_own_addr) {
+        if (src_addr == g_own_addr)
+        {
             esp_ieee802154_receive_handle_done(frame);
             return;
         }
@@ -296,21 +329,48 @@ void esp_ieee802154_receive_done(uint8_t* frame, esp_ieee802154_frame_info_t* fr
     uint16_t frame_len = frame[0] + 1; // +1 for the length byte itself
 
     // Only queue valid frames
-    if (frame_len <= sizeof(ieee802154_rx_frame_t)) {
+    if (frame_len <= sizeof(ieee802154_rx_frame_t))
+    {
         ieee802154_rx_frame_t rx_frame;
-        rx_frame.len = frame_len;
-        rx_frame.rssi = frame_info->rssi;
+        rx_frame.len       = frame_len;
+        rx_frame.rssi      = frame_info->rssi;
+        rx_frame.lqi       = frame_info->lqi;
+        rx_frame.channel   = frame_info->channel;
+        rx_frame.timestamp = frame_info->timestamp;
         memcpy(rx_frame.data, frame, frame_len);
 
         // Send to queue from ISR context
         BaseType_t higher_priority_task_woken = pdFALSE;
         xQueueSendFromISR(ieee802154_rx_queue, &rx_frame, &higher_priority_task_woken);
 
-        if (higher_priority_task_woken == pdTRUE) {
+        if (higher_priority_task_woken == pdTRUE)
+        {
             portYIELD_FROM_ISR();
         }
     }
 
     // Notify the driver that we're done handling this frame
     esp_ieee802154_receive_handle_done(frame);
+}
+
+// Called from ISR when a frame was transmitted successfully.
+// ack is non-NULL only when ACK_REQUEST was set in the FCF.
+void esp_ieee802154_transmit_done(const uint8_t *frame, const uint8_t *ack,
+                                  esp_ieee802154_frame_info_t *ack_frame_info)
+{
+    ESP_EARLY_LOGI(TAG, "TX OK: seq=%u len=%u", frame[3], frame[0]);
+}
+
+// Called from ISR when a transmission failed.
+void esp_ieee802154_transmit_failed(const uint8_t *frame, esp_ieee802154_tx_error_t error)
+{
+    const char *reason;
+    switch (error) {
+        case ESP_IEEE802154_TX_ERR_CCA_BUSY:  reason = "channel busy (CCA)"; break;
+        case ESP_IEEE802154_TX_ERR_ABORT:     reason = "aborted";            break;
+        case ESP_IEEE802154_TX_ERR_NO_ACK:    reason = "no ACK";             break;
+        case ESP_IEEE802154_TX_ERR_COEXIST:   reason = "coexist rejected";   break;
+        default:                              reason = "unknown";            break;
+    }
+    ESP_EARLY_LOGW(TAG, "TX FAILED: seq=%u — %s", frame[3], reason);
 }

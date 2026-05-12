@@ -66,9 +66,12 @@ static uint16_t g_seq = 0; // global sequence counter, increments per send
 QueueHandle_t ieee802154_rx_queue = NULL;
 
 typedef struct {
-    uint8_t data[256];
+    uint8_t  data[256];
     uint16_t len;
-    int8_t rssi;
+    int8_t   rssi;
+    uint8_t  lqi;
+    uint8_t  channel;
+    uint64_t timestamp;
 } ieee802154_rx_frame_t;
 
 // ---- Encoding: TLV -------------------------------------------------
@@ -291,8 +294,9 @@ void button_receiver_802154_task(void* arg) {
             // Parse the received frame
             if (ieee802154_parse_frame(rx_frame.data, rx_frame.len, &frame) == 0) {
                 ESP_LOGI(TAG,
-                         "RX: SEQ=%u | SRC=0x%04X | Payload=%d bytes | RSSI=%d dBm",
-                         frame.sequence, frame.src_addr, frame.payload_len, rx_frame.rssi);
+                         "RX: SEQ=%u | SRC=0x%04X | CH=%u | RSSI=%d dBm | LQI=%u | Payload=%d bytes",
+                         frame.sequence, frame.src_addr, rx_frame.channel,
+                         rx_frame.rssi, rx_frame.lqi, frame.payload_len);
 
                 // Log payload in hex if present
                 if (frame.payload_len > 0 && frame.payload_len <= 64) {
